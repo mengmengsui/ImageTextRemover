@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>图片去文字工具</title>
+    <style>
+        /* 样式部分与之前一致，未修改 */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', sans-serif;
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            background: #f5f7fa;
+        }
+        .main-container {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+        }
+        .app-title {
+            color: #1a202c;
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            font-weight: 600;
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .button-row {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .folder-path {
+            padding: 0.75rem 1rem;
+            background: #f7fafc;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            color: #4a5568;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .folder-path::before {
+            content: '📁 所选文件夹：';
+            margin-right: 0.5rem;
+            color: #718096;
+        }
+        .select-btn {
+            background: #3182ce;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.2s;
+        }
+        .select-btn:hover { background: #2b6cb0; }
+        .reset-btn {
+            background: #e53e3e;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.2s;
+        }
+        .reset-btn:hover { background: #c53030; }
+        .stats-row {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .stats-card {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            background: #edf2f7;
+            font-size: 0.9rem;
+            min-width: 100px;
+        }
+        .stats-card span {
+            font-weight: 600;
+            margin-left: 0.25rem;
+        }
+        .stats-pending span { color: #4a5568; }
+        .stats-success span { color: #38a169; }
+        .stats-error span { color: #e53e3e; }
+        .progress-item {
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .progress-item span:first-child {
+            flex: 1;
+            margin-right: 1rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .progress-processing { background: #fffaf0; border-left: 4px solid #d69e2e; }
+        .progress-success { background: #f0fff4; border-left: 4px solid #38a169; }
+        .progress-error { background: #fff5f5; border-left: 4px solid #e53e3e; }
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <h1 class="app-title">图片去文字处理工具</h1>
+
+        <div class="controls">
+            <div class="button-row">
+                <button class="select-btn" id="selectFolder">选择待处理文件夹</button>
+                <button class="reset-btn" id="resetBtn">重置</button>
+            </div>
+
+            <div class="folder-path" id="folderPathDisplay">未选择文件夹</div>
+
+            <div class="stats-row">
+                <div class="stats-card stats-pending">待处理：<span id="statsPending">0</span>张</div>
+                <div class="stats-card stats-success">已成功：<span id="statsSuccess">0</span>张</div>
+                <div class="stats-card stats-error">处理失败：<span id="statsError">0</span>张</div>
+            </div>
+        </div>
+
+        <div id="progressContainer"></div>
+    </div>
+
+    <script>
+        let taskId = null;
+        let totalImages = 0;
+        let progressInterval = null;
+        const folderPathDisplay = document.getElementById('folderPathDisplay');
+
+        // 初始化所有状态（核心重置函数）
+        function resetAllStates() {
+            taskId = null;
+            totalImages = 0;
+            clearInterval(progressInterval);  // 停止轮询
+            document.getElementById('statsPending').textContent = '0';
+            document.getElementById('statsSuccess').textContent = '0';
+            document.getElementById('statsError').textContent = '0';
+            folderPathDisplay.textContent = '未选择文件夹';
+            document.getElementById('progressContainer').innerHTML = '';
+        }
+
+        // 选择文件夹逻辑
+        document.getElementById('selectFolder').addEventListener('click', async () => {
+            resetAllStates();  // 选择前先重置旧状态
+            try {
+                const folderRes = await fetch('/select-folder');
+                const { folderPath } = await folderRes.json();
+
+                if (!folderPath) {
+                    alert('请选择一个包含图片的文件夹');
+                    return;
+                }
+
+                folderPathDisplay.textContent = folderPath;  // 显示路径
+
+                const startRes = await fetch('/start-process', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder: folderPath })
+                });
+                const { taskId: newTaskId } = await startRes.json();
+                taskId = newTaskId;
+
+                progressInterval = setInterval(pollProgress, 1500);  // 启动轮询
+            } catch (error) {
+                console.error('操作失败:', error);
+                alert('选择文件夹时发生错误，请重试');
+            }
+        });
+
+        // 重置按钮逻辑（关键修改）
+        document.getElementById('resetBtn').addEventListener('click', async () => {
+            if (!taskId) {
+                alert('当前无任务可重置');
+                return;
+            }
+
+            try {
+                // 1. 向后端发送停止任务请求（需后端真正停止任务）
+                const stopRes = await fetch(`/stop-process/${taskId}`, { method: 'POST' });
+                const stopResult = await stopRes.json();
+
+                if (stopResult.status !== 'success') {
+                    throw new Error(stopResult.message);
+                }
+
+                // 2. 停止成功后，提示用户并重置前端
+                alert('任务已重置！');  // 显示提示
+                resetAllStates();  // 点击确定后重置界面
+            } catch (error) {
+                console.error('重置失败:', error);
+                alert(`重置失败：${error.message || '请重试'}`);
+            }
+        });
+
+        // 轮询进度逻辑（未修改）
+        function pollProgress() {
+            const progressContainer = document.getElementById('progressContainer');
+            if (!taskId) return;
+
+            fetch(`/process-status/${taskId}`)
+                .then(res => res.json())
+                .then(({ progress, isComplete }) => {
+                    const systemMsg = progress.find(item =>
+                        item.filename === '系统提示' &&
+                        item.message.includes('待处理图片')
+                    );
+                    if (systemMsg && !totalImages) {
+                        const count = parseInt(systemMsg.message.match(/\d+/)[0]);
+                        totalImages = count || 0;
+                        document.getElementById('statsPending').textContent = totalImages;
+                    }
+
+                    let success = 0, error = 0;
+                    progress.forEach(item => {
+                        if (item.filename === '系统提示') return;
+                        if (item.status === 'success') success++;
+                        if (item.status === 'error') error++;
+                    });
+
+                    const pending = totalImages ?
+                        Math.max(totalImages - success - error, 0) :
+                        '?';
+
+                    document.getElementById('statsPending').textContent = pending;
+                    document.getElementById('statsSuccess').textContent = success;
+                    document.getElementById('statsError').textContent = error;
+
+                    progressContainer.innerHTML = progress.map(item => {
+                        let className, statusText;
+                        switch(item.status) {
+                            case 'processing':
+                                className = 'progress-processing';
+                                statusText = '处理中';
+                                break;
+                            case 'success':
+                                className = 'progress-success';
+                                statusText = '已成功';
+                                break;
+                            case 'error':
+                                className = 'progress-error';
+                                statusText = '处理失败';
+                                break;
+                            default:
+                                className = '';
+                                statusText = item.status;
+                        }
+                        return `
+                            <div class="progress-item ${className}">
+                                <span>${item.filename}</span>
+                                <span>${statusText}: ${item.message}</span>
+                            </div>
+                        `;
+                    }).join('');
+
+                    if (isComplete) clearInterval(progressInterval);
+                })
+                .catch(error => {
+                    console.error('进度获取失败:', error);
+                    progressContainer.innerHTML = `
+                        <div class="progress-item progress-error">
+                            无法获取处理进度，请检查网络连接
+                        </div>
+                    `;
+                });
+        }
+    </script>
+</body>
+</html>
+    

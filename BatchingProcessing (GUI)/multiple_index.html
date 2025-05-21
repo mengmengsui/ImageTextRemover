@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>图片去文字工具</title>
+    <style>
+        /* 全局基础样式 */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', sans-serif;
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            background: #f5f7fa;
+        }
+
+        /* 主容器样式 */
+        .main-container {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+        }
+
+        /* 标题样式 */
+        .app-title {
+            color: #1a202c;
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            font-weight: 600;
+        }
+
+        /* 操作区（按钮+统计）样式 */
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            flex-wrap: wrap; /* 小屏幕自动换行 */
+        }
+
+        /* 选择文件夹按钮 */
+        .select-btn {
+            background: #3182ce;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.2s;
+        }
+        .select-btn:hover { background: #2b6cb0; }
+
+        /* 统计卡片样式 */
+        .stats-card {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            background: #edf2f7;
+            font-size: 0.9rem;
+            min-width: 100px; /* 确保卡片宽度一致 */
+        }
+        .stats-card span {
+            font-weight: 600;
+            margin-left: 0.25rem;
+        }
+        .stats-pending span { color: #4a5568; }   /* 待处理：灰色 */
+        .stats-processing span { color: #d69e2e; } /* 处理中：金色 */
+        .stats-success span { color: #38a169; }    /* 成功：绿色 */
+        .stats-error span { color: #e53e3e; }      /* 失败：红色 */
+
+        /* 进度项样式 */
+        .progress-item {
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .progress-item span:first-child {
+            flex: 1;
+            margin-right: 1rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .progress-processing { background: #fffaf0; border-left: 4px solid #d69e2e; }
+        .progress-success { background: #f0fff4; border-left: 4px solid #38a169; }
+        .progress-error { background: #fff5f5; border-left: 4px solid #e53e3e; }
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <h1 class="app-title">图片去文字处理工具</h1>
+
+        <!-- 操作区：按钮+统计 -->
+        <div class="controls">
+            <button class="select-btn" id="selectFolder">选择待处理文件夹</button>
+            <div class="stats-card stats-pending">待处理：<span id="statsPending">0</span>张</div>
+            <div class="stats-card stats-processing">处理中：<span id="statsProcessing">0</span>张</div>
+            <div class="stats-card stats-success">已成功：<span id="statsSuccess">0</span>张</div>
+            <div class="stats-card stats-error">处理失败：<span id="statsError">0</span>张</div>
+        </div>
+
+        <!-- 进度显示区域 -->
+        <div id="progressContainer"></div>
+    </div>
+
+    <script>
+        let taskId = null;
+        let totalImages = 0;
+
+        // 初始化统计数据
+        function resetStats() {
+            document.getElementById('statsPending').textContent = '0';
+            document.getElementById('statsProcessing').textContent = '0';
+            document.getElementById('statsSuccess').textContent = '0';
+            document.getElementById('statsError').textContent = '0';
+            totalImages = 0;
+        }
+
+        // 选择文件夹并启动处理
+        document.getElementById('selectFolder').addEventListener('click', async () => {
+            resetStats(); // 重置统计
+            try {
+                // 获取文件夹路径
+                const folderRes = await fetch('/select-folder');
+                const { folderPath } = await folderRes.json();
+
+                if (!folderPath) {
+                    alert('请选择一个包含图片的文件夹');
+                    return;
+                }
+
+                // 启动处理任务
+                const startRes = await fetch('/start-process', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder: folderPath })
+                });
+                const { taskId: newTaskId } = await startRes.json();
+                taskId = newTaskId;
+
+                // 开始轮询进度
+                pollProgress();
+            } catch (error) {
+                console.error('操作失败:', error);
+                alert('选择文件夹时发生错误，请重试');
+            }
+        });
+
+        // 轮询进度
+        function pollProgress() {
+            const progressContainer = document.getElementById('progressContainer');
+            progressContainer.innerHTML = '<div class="progress-item progress-processing">正在初始化处理任务...</div>';
+
+            const interval = setInterval(async () => {
+                if (!taskId) return clearInterval(interval);
+
+                try {
+                    const statusRes = await fetch(`/process-status/${taskId}`);
+                    const { progress, isComplete } = await statusRes.json();
+
+                    // 更新总图片数（从系统提示获取）
+                    const systemMsg = progress.find(item =>
+                        item.filename === '系统提示' &&
+                        item.message.includes('待处理图片')
+                    );
+                    if (systemMsg && !totalImages) {
+                        const count = parseInt(systemMsg.message.match(/\d+/)[0]);
+                        totalImages = count || 0;
+                        document.getElementById('statsPending').textContent = totalImages;
+                    }
+
+                    // 统计各状态数量
+                    let processing = 0, success = 0, error = 0;
+                    progress.forEach(item => {
+                        if (item.filename === '系统提示') return;
+                        switch(item.status) {
+                            case 'processing': processing++; break;
+                            case 'success': success++; break;
+                            case 'error': error++; break;
+                        }
+                    });
+
+                    // 计算待处理数（总数 - 处理中 - 成功 - 失败）
+                    const pending = totalImages ?
+                        Math.max(totalImages - (processing + success + error), 0) :
+                        '?';
+
+                    // 更新统计区域
+                    document.getElementById('statsPending').textContent = pending;
+                    document.getElementById('statsProcessing').textContent = processing;
+                    document.getElementById('statsSuccess').textContent = success;
+                    document.getElementById('statsError').textContent = error;
+
+                    // 更新进度显示
+                    progressContainer.innerHTML = progress.map(item => {
+                        let className, statusText;
+                        switch(item.status) {
+                            case 'processing':
+                                className = 'progress-processing';
+                                statusText = '处理中';
+                                break;
+                            case 'success':
+                                className = 'progress-success';
+                                statusText = '已成功';
+                                break;
+                            case 'error':
+                                className = 'progress-error';
+                                statusText = '处理失败';
+                                break;
+                            default:
+                                className = '';
+                                statusText = item.status;
+                        }
+                        return `
+                            <div class="progress-item ${className}">
+                                <span>${item.filename}</span>
+                                <span>${statusText}: ${item.message}</span>
+                            </div>
+                        `;
+                    }).join('');
+
+                    if (isComplete) {
+                        clearInterval(interval);
+                        progressContainer.innerHTML += `
+                            <div class="progress-item progress-success" style="margin-top:1rem;">
+                                所有任务处理完成！成功：${success}张，失败：${error}张
+                            </div>
+                        `;
+                    }
+                } catch (error) {
+                    console.error('进度获取失败:', error);
+                    progressContainer.innerHTML = `
+                        <div class="progress-item progress-error">
+                            无法获取处理进度，请检查网络连接
+                        </div>
+                    `;
+                }
+            }, 1500);
+        }
+    </script>
+</body>
+</html>
