@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>智能文字去除工具（最终修复版）</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .canvas-container {
+            border: 2px dashed #e5e7eb;
+            max-height: 600px;
+            overflow: auto;
+            position: relative;
+        }
+        .rect {
+            position: absolute;
+            border: 2px solid #3b82f6;
+            background: rgba(59, 130, 246, 0.1);
+            cursor: default;
+        }
+        /* 关键修复：删除按钮允许事件穿透 */
+        .rect-delete-btn {
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #fff;
+            border-radius: 50%;
+            background: #ef4444;
+            color: white;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            pointer-events: auto; /* 允许点击事件 */
+        }
+        .rect-delete-btn:hover {
+            background: #dc2626;
+        }
+        /* 临时框样式（半透明，无删除按钮） */
+        .temp-rect {
+            border: 2px dashed #3b82f6;
+            background: rgba(59, 130, 246, 0.05);
+        }
+    </style>
+</head>
+<body class="bg-gray-50 p-8">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-2xl font-bold mb-6 text-gray-900">智能文字去除工具</h1>
+
+        <!-- 文件选择 -->
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-700">选择图片</label>
+            <input type="file" id="imageInput" accept="image/*" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+        </div>
+
+        <!-- 图片预览与框选区域 -->
+        <div class="canvas-container mb-6">
+            <canvas id="previewCanvas"></canvas>
+            <div id="rectContainer" class="pointer-events-none"></div> <!-- 父容器禁用事件，按钮单独启用 -->
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="mb-6 flex gap-3">
+            <button id="clearAllBtn" class="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600">清空所有</button>
+            <button id="clearRectsBtn" class="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300">清除所有区域</button>
+            <button id="processBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">开始去除文字</button>
+        </div>
+
+        <!-- 结果展示（含下载按钮） -->
+        <div class="result-area hidden">
+            <h2 class="text-lg font-medium mb-3 text-gray-800">处理结果</h2>
+            <img id="resultImage" class="max-w-full rounded-md shadow-sm">
+            <button id="downloadBtn" class="mt-4 px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600">下载图片</button>
+        </div>
+    </div>
+
+    <script>
+        let currentImage = null;
+        let canvas = null;
+        let ctx = null;
+        let rects = []; // 存储原始坐标（未缩放）
+        let rectElements = []; // 存储DOM元素（与rects一一对应）
+        let isDrawing = false;
+        let startX, startY;
+        let resultBlob = null;
+
+        // 初始化画布
+        function initCanvas(img) {
+            const container = document.querySelector('.canvas-container');
+            container.innerHTML = '<canvas id="previewCanvas"></canvas><div id="rectContainer" class="pointer-events-none"></div>';
+            canvas = document.getElementById('previewCanvas');
+            ctx = canvas.getContext('2d');
+
+            const maxWidth = Math.min(container.clientWidth, 800);
+            const maxHeight = 600;
+            const scale = Math.min(maxWidth / img.width, maxHeight / img.height);
+
+            canvas.width = img.width * scale;
+            canvas.height = img.height * scale;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+            currentImage = {
+                naturalWidth: img.naturalWidth,
+                naturalHeight: img.naturalHeight,
+                scale: scale
+            };
+        }
+
+        // 处理文件选择
+        document.getElementById('imageInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    resetState(); // 重置所有状态
+                    initCanvas(img); // 初始化画布
+                    setupDrawing(); // 绑定绘制事件
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // 重置所有状态（新增辅助函数）
+        function resetState() {
+            rects = [];
+            rectElements = [];
+            isDrawing = false;
+            startX = startY = null;
+            document.querySelector('.result-area').classList.add('hidden');
+            document.getElementById('resultImage').src = '';
+            resultBlob = null;
+        }
+
+        // 初始化绘制事件
+        function setupDrawing() {
+            const rectContainer = document.getElementById('rectContainer');
+
+            // 鼠标按下：开始绘制
+            canvas.addEventListener('mousedown', (e) => {
+                isDrawing = true;
+                startX = e.offsetX;
+                startY = e.offsetY;
+            });
+
+            // 鼠标移动：显示临时框
+            canvas.addEventListener('mousemove', (e) => {
+                if (!isDrawing) return;
+                const currentX = e.offsetX;
+                const currentY = e.offsetY;
+                clearTempRects(); // 清除旧临时框
+                drawTempRect(currentX, currentY); // 绘制新临时框
+            });
+
+            // 鼠标松开：确认框选
+            canvas.addEventListener('mouseup', (e) => {
+                if (!isDrawing) return;
+                isDrawing = false;
+                clearTempRects(); // 清除临时框
+
+                const x1 = Math.min(startX, e.offsetX);
+                const y1 = Math.min(startY, e.offsetY);
+                const x2 = Math.max(startX, e.offsetX);
+                const y2 = Math.max(startY, e.offsetY);
+
+                if (x2 - x1 < 10 || y2 - y1 < 10) return; // 过滤过小的框
+
+                // 转换为原始图片坐标（后端需要的真实尺寸）
+                const originalX1 = x1 / currentImage.scale;
+                const originalY1 = y1 / currentImage.scale;
+                const originalX2 = x2 / currentImage.scale;
+                const originalY2 = y2 / currentImage.scale;
+
+                // 添加到数据列表
+                rects.push({ x1: originalX1, y1: originalY1, x2: originalX2, y2: originalY2 });
+                // 创建并添加到视图
+                const newRectElement = createRectElement(rects.length - 1); // 正确索引是当前长度-1
+                rectContainer.appendChild(newRectElement);
+                rectElements.push(newRectElement); // 维护元素列表
+            });
+        }
+
+        // 清除所有临时框
+        function clearTempRects() {
+            document.querySelectorAll('.temp-rect').forEach(el => el.remove());
+        }
+
+        // 绘制临时框（鼠标移动时显示）
+        function drawTempRect(currentX, currentY) {
+            const tempRect = document.createElement('div');
+            tempRect.className = 'rect temp-rect';
+            tempRect.style.left = `${Math.min(startX, currentX)}px`;
+            tempRect.style.top = `${Math.min(startY, currentY)}px`;
+            tempRect.style.width = `${Math.abs(currentX - startX)}px`;
+            tempRect.style.height = `${Math.abs(currentY - startY)}px`;
+            document.getElementById('rectContainer').appendChild(tempRect);
+        }
+
+        // 创建带删除按钮的正式框
+        function createRectElement(index) {
+            const rect = rects[index]; // 直接使用传入的index（此时rects[index]是刚添加的元素）
+            const scale = currentImage.scale;
+
+            const rectDiv = document.createElement('div');
+            rectDiv.className = 'rect';
+            rectDiv.style.left = `${rect.x1 * scale}px`;
+            rectDiv.style.top = `${rect.y1 * scale}px`;
+            rectDiv.style.width = `${(rect.x2 - rect.x1) * scale}px`;
+            rectDiv.style.height = `${(rect.y2 - rect.y1) * scale}px`;
+
+            // 创建删除按钮并绑定正确索引
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'rect-delete-btn';
+            deleteBtn.innerHTML = '×';
+            deleteBtn.addEventListener('click', () => removeRect(index)); // 直接使用当前index
+
+            rectDiv.appendChild(deleteBtn);
+            return rectDiv;
+        }
+
+        // 删除单个框（核心逻辑）
+        function removeRect(index) {
+            rects.splice(index, 1); // 删除数据
+            rectElements[index].remove(); // 删除视图
+            rectElements.splice(index, 1); // 更新元素列表
+        }
+
+        // 清除所有区域按钮
+        document.getElementById('clearRectsBtn').addEventListener('click', () => {
+            rects = [];
+            rectElements.forEach(el => el.remove());
+            rectElements = [];
+        });
+
+        // 清空所有功能（包括图片）
+        document.getElementById('clearAllBtn').addEventListener('click', () => {
+            const imageInput = document.getElementById('imageInput');
+            imageInput.value = null;
+            document.getElementById('rectContainer').innerHTML = '';
+            resetState(); // 使用辅助函数重置状态
+            if (canvas) {
+                canvas.remove();
+                canvas = null;
+                ctx = null;
+            }
+        });
+
+        // 处理图片按钮（调用后端）
+        document.getElementById('processBtn').addEventListener('click', async () => {
+            if (!currentImage || rects.length === 0) {
+                alert('请先选择图片并框选需要去除的区域');
+                return;
+            }
+
+            const file = document.getElementById('imageInput').files[0];
+            const formData = new FormData();
+            formData.append('image', file);
+            formData.append('rects', JSON.stringify(rects));
+
+            try {
+                const response = await fetch('/process', { method: 'POST', body: formData });
+                if (!response.ok) throw new Error('处理失败，请检查后端日志');
+
+                resultBlob = await response.blob();
+                const resultUrl = URL.createObjectURL(resultBlob);
+                document.getElementById('resultImage').src = resultUrl;
+                document.querySelector('.result-area').classList.remove('hidden');
+            } catch (error) {
+                alert(`处理失败：${error.message}`);
+            }
+        });
+
+        // 下载处理结果
+        document.getElementById('downloadBtn').addEventListener('click', () => {
+            if (!resultBlob) {
+                alert('请先处理图片获取结果');
+                return;
+            }
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(resultBlob);
+            a.download = `文字去除结果_${new Date().toISOString().replace(/:/g, '-')}.png`;
+            a.click();
+            URL.revokeObjectURL(a.href);
+        });
+    </script>
+</body>
+</html>
