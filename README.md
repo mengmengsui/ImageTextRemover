@@ -1,4 +1,4 @@
-说明：标*号的为当前最新版本
+**说明：标*号的为当前最新版本**
 # *SelectionBoxDeletion
 目前最新最全的单个图片处理版本，支持：
 - 上传一张图片，在页面上展示图片
@@ -34,8 +34,25 @@
 
 ****
 
-# SelectionBoxOnly
-SelectionBoxOnly的前序版本，仅能增加框选区域和删除全部框选区域，不能逐个删除。
+# SelectionBox
+SelectionBoxDeletion的前序版本，仅能增加框选区域和删除全部框选区域，不能逐个删除。
+</br>
+
+**文件说明**
+- backend.py：后端主程序
+- core.py：核心程序，调用lama大模型处理图片
+- index.html：前端界面
+</br>
+
+**使用说明**
+1. 运行backend.py，打开网页。
+2. 选择图片，页面将展示所选图片。
+3. 在图片上框选要去除的文字。
+4. 单击“开始去除文字”，开始处理。处理完成的图片将显示在下方。
+5. 单击“清除所有区域”，可清除图片上所有的框选。
+6. 单击“清空所有”，将清空当前任务，初始化程序。
+7. 图片处理完成后，单击“下载”按钮，可下载处理后的图片。
+
 
 ****
 
@@ -51,6 +68,7 @@ SelectionBoxOnly的前序版本，仅能增加框选区域和删除全部框选�
 - multiple.py：后端主程序，运行自此开始
 - multiple_core.py：核心程序，调用V1版本批处理程序处理图片
 - example_multiple.py：V1版本批处理程序
+- folder_selector.py：文件夹选择辅助代码
 - /templates/multiple_index.html：前端页面
 </br>
 
