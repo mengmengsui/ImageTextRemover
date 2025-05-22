@@ -1,4 +1,14 @@
 **说明：标*号的为当前最新版本**
+
+[*SelectionBoxDeletion：框选可删](#selectionboxdeletion)</br>
+[SelectionBox：框选](#selectionbox)</br>
+[*BatchProcessing (GUI)：批处理界面操作](#batchprocessing-gui)</br>
+[*BatchProcessing V1：批处理无界面](#batchprocessing-v1)</br>
+[SingleProcessing：单个处理](#singleprocessing)</br>
+
+
+
+
 # *SelectionBoxDeletion
 目前最新最全的单个图片处理版本，支持：
 - 上传一张图片，在页面上展示图片
